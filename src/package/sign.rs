@@ -90,7 +90,7 @@ impl SignConfig {
     }
 }
 
-const G4_CERT: &[u8; 1113] = include_bytes!("AppleWWDRCAG4.cer");
+const G4_CERT: &[u8; 1562] = include_bytes!("AppleWWDRCAG4.pem");
 
 pub enum WWDR<'a> {
     G4,
