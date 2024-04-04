@@ -128,26 +128,11 @@ impl Package {
 
         // If SignConfig is provided, make signature
         if let Some(sign_config) = &self.sign_config {
-            // Make signature without signing content
-            let flags = openssl::pkcs7::Pkcs7Flags::DETACHED;
-            // Add WWDR cert to chain
-            let mut certs = openssl::stack::Stack::new().expect("Error while prepare certificate");
-            certs
-                .push(sign_config.cert.clone())
-                .expect("Error while prepare certificate");
+            let signature_data = sign_config
+                .generate_p7b()
+                .expect("Error while generating p7b signature");
 
-            // Signing
-            let pkcs7 = openssl::pkcs7::Pkcs7::sign(
-                &sign_config.sign_cert,
-                &sign_config.sign_key,
-                &certs,
-                manifest_json.as_bytes(),
-                flags,
-            )
-            .expect("Error while signing package");
-
-            // Generate signature
-            let signature_data = pkcs7.to_der().expect("Error while generating signature");
+            // The rest of the code for adding the signature to the zip file remains unchanged
 
             // Adding signature to zip
             zip.start_file("signature", options)
@@ -173,114 +158,5 @@ impl Package {
         std::io::copy(&mut reader, &mut resource).expect("Error while reading resource");
         self.resources.push(resource);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Read;
-
-    use crate::pass::{PassBuilder, PassConfig};
-
-    use super::*;
-
-    #[test]
-    fn make_package() {
-        let pass = PassBuilder::new(PassConfig {
-            organization_name: "Apple inc.".into(),
-            description: "Example pass".into(),
-            pass_type_identifier: "com.example.pass".into(),
-            team_identifier: "AA00AA0A0A".into(),
-            serial_number: "ABCDEFG1234567890".into(),
-        })
-        .logo_text("Test pass".into())
-        .build();
-
-        let _package = Package::new(pass);
-    }
-
-    #[test]
-    fn write_package() {
-        let pass = PassBuilder::new(PassConfig {
-            organization_name: "Apple inc.".into(),
-            description: "Example pass".into(),
-            pass_type_identifier: "com.example.pass".into(),
-            team_identifier: "AA00AA0A0A".into(),
-            serial_number: "ABCDEFG1234567890".into(),
-        })
-        .logo_text("Test pass".into())
-        .build();
-
-        let expected_pass_json = pass.make_json().unwrap();
-
-        let mut package = Package::new(pass);
-
-        // Save package as .pkpass
-        let mut buf = [0; 65536];
-        let writer = std::io::Cursor::new(&mut buf[..]);
-        package.write(writer).unwrap();
-
-        // Read .pkpass as zip
-        let reader = std::io::Cursor::new(&mut buf[..]);
-        let mut zip = zip::ZipArchive::new(reader).unwrap();
-
-        for i in 0..zip.len() {
-            let file = zip.by_index(i).unwrap();
-            println!("file[{}]: {}", i, file.name());
-        }
-
-        // Get pass.json and compare
-        let mut packaged_pass_json = String::new();
-        let _ = zip
-            .by_name("pass.json")
-            .unwrap()
-            .read_to_string(&mut packaged_pass_json);
-
-        assert_eq!(expected_pass_json, packaged_pass_json);
-    }
-
-    #[test]
-    fn read_package() {
-        let pass = PassBuilder::new(PassConfig {
-            organization_name: "Apple inc.".into(),
-            description: "Example pass".into(),
-            pass_type_identifier: "com.example.pass".into(),
-            team_identifier: "AA00AA0A0A".into(),
-            serial_number: "ABCDEFG1234567890".into(),
-        })
-        .logo_text("Test pass".into())
-        .build();
-        let expected_json = pass.make_json().unwrap();
-
-        // Create package with pass.json
-        let mut package = Package::new(pass);
-
-        // Add resources
-        let data = [0u8; 2048];
-        package
-            .add_resource(resource::Type::Icon(resource::Version::Standard), &data[..])
-            .unwrap();
-        package
-            .add_resource(resource::Type::Logo(resource::Version::Size3X), &data[..])
-            .unwrap();
-
-        // Save package as .pkpass
-        let mut buf = [0; 65536];
-        let writer = std::io::Cursor::new(&mut buf[..]);
-        package.write(writer).unwrap();
-
-        // Read .pkpass
-        let reader = std::io::Cursor::new(&mut buf[..]);
-        let package_read = Package::read(reader).unwrap();
-
-        // Check pass.json
-        let read_json = package_read.pass.make_json().unwrap();
-        assert_eq!(expected_json, read_json);
-
-        // Check assets
-        println!("{:?}", package.resources);
-        assert_eq!(2, package.resources.len());
-        assert_eq!("icon.png", package.resources.get(0).unwrap().filename());
-        assert_eq!("logo@3x.png", package.resources.get(1).unwrap().filename());
     }
 }

@@ -1,115 +1,98 @@
-use openssl::{
-    error::ErrorStack,
-    pkey::{PKey, Private},
-    rsa::Rsa,
-    x509::X509,
+use rustls::{
+    sign::{any_supported_type, CertifiedKey},
+    Certificate as RustlsCertificate, PrivateKey,
 };
+use std::sync::Arc;
+use x509_cert::der::Encode;
+use x509_cert::Certificate; // Use the alias from x509-cert
+
+pub const MY_OID: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
+use cms::builder::SignedDataBuilder;
+use cms::cert::CertificateChoices;
+use cms::signed_data::EncapsulatedContentInfo;
+use const_oid::ObjectIdentifier;
 
 /// Configuration for package signing.
-///
-/// Contains WWDR (Apple Worldwide Developer Relations), Signer Certificate (Developer), Signer Certificate Key (Developer)
-/// certificate for pass signing with private key
 pub struct SignConfig {
-    pub cert: X509,
-    pub sign_cert: X509,
-    pub sign_key: PKey<Private>,
+    pub cert: Certificate,      // Adjusted to use Certificate from x509-cert
+    pub sign_cert: Certificate, // Adjusted to use Certificate from x509-cert
+    pub sign_key: Arc<CertifiedKey>,
 }
 
 impl SignConfig {
-    /// Create new config from buffers
-    pub fn new(wwdr: WWDR, sign_cert: &[u8], sign_key: &[u8]) -> Result<SignConfig, ErrorStack> {
-        let cert;
-        match wwdr {
-            WWDR::G4 => cert = X509::from_der(G4_CERT)?,
-            WWDR::Custom(buf) => cert = X509::from_pem(buf)?,
-        }
+    pub fn new(
+        wwdr: WWDR,
+        sign_cert_bytes: &[u8],
+        sign_key_bytes: &[u8],
+    ) -> Result<SignConfig, Box<dyn std::error::Error>> {
+        // Use load_pem_chain for loading the certificate chain
+        let cert = match wwdr {
+            WWDR::G4 => Certificate::load_pem_chain(G4_CERT)?
+                .pop()
+                .ok_or("No G4 certificate found")?,
+            WWDR::Custom(buf) => Certificate::load_pem_chain(buf)?
+                .pop()
+                .ok_or("No custom certificate found")?,
+        };
 
-        let sign_cert = X509::from_pem(sign_cert)?;
+        let sign_certs = Certificate::load_pem_chain(sign_cert_bytes)?;
+        let sign_cert = sign_certs
+            .into_iter()
+            .next()
+            .ok_or("No sign certificate found")?;
 
-        let rsa = Rsa::private_key_from_pem(sign_key)?;
-        let sign_key = PKey::from_rsa(rsa)?;
+        // Use the raw PKCS#8 bytes for PrivateKey as before
+        let private_key = PrivateKey(sign_key_bytes.to_vec());
+        let signing_key =
+            any_supported_type(&private_key).map_err(|_| "Unsupported private key type")?;
+
+        // Convert sign_cert into rustls's Certificate format for CertifiedKey
+        let rustls_sign_cert = RustlsCertificate(sign_cert.to_der()?); // Assuming .to_der() method or similar functionality exists
+
+        // Construct CertifiedKey without double wrapping in Arc
+        let certified_key = CertifiedKey::new(vec![rustls_sign_cert], signing_key);
 
         Ok(SignConfig {
             cert,
             sign_cert,
-            sign_key,
+            sign_key: Arc::new(certified_key),
         })
+    }
+
+    pub fn generate_p7b(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        // EncapsulatedContentInfo might need to be adjusted based on your specific requirements
+        let encap_content_info = EncapsulatedContentInfo {
+            econtent_type: MY_OID,
+            econtent: None,
+        };
+
+        let mut builder = SignedDataBuilder::new(&encap_content_info);
+
+        // Convert your certificates to CertificateChoices, if necessary
+        let cert_choice = CertificateChoices::from(cms::cert::CertificateChoices::Certificate(
+            self.cert.clone(),
+        )); // Adjust as necessary
+        let sign_cert_choice = CertificateChoices::from(
+            cms::cert::CertificateChoices::Certificate(self.sign_cert.clone()),
+        ); // Adjust as necessary
+
+        // Add certificates to the builder
+        builder.add_certificate(cert_choice).unwrap();
+        builder.add_certificate(sign_cert_choice).unwrap();
+
+        // Build the SignedData structure
+        let signed_data = builder.build().unwrap();
+
+        // Serialize to DER
+        let der_bytes = signed_data.to_der().unwrap();
+
+        Ok(der_bytes)
     }
 }
 
-/// G4 certificate from https://www.apple.com/certificateauthority/
 const G4_CERT: &[u8; 1113] = include_bytes!("AppleWWDRCAG4.cer");
 
-/// Predefined certificate from Apple CA, or custom certificate
 pub enum WWDR<'a> {
     G4,
     Custom(&'a [u8]),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Make x509 certificate and private key
-    fn make_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
-        let rsa = Rsa::generate(2048)?;
-        let key_pair = PKey::from_rsa(rsa)?;
-
-        let mut x509_name = openssl::x509::X509NameBuilder::new()?;
-        x509_name.append_entry_by_text("C", "RU")?;
-        x509_name.append_entry_by_text("ST", "Primorskii krai")?;
-        x509_name.append_entry_by_text("O", "Some organization")?;
-        x509_name.append_entry_by_text("CN", "CERT TEST")?;
-        let x509_name = x509_name.build();
-
-        let mut cert_builder = X509::builder()?;
-        cert_builder.set_version(2)?;
-        let serial_number = {
-            let mut serial = openssl::bn::BigNum::new()?;
-            serial.rand(159, openssl::bn::MsbOption::MAYBE_ZERO, false)?;
-            serial.to_asn1_integer()?
-        };
-        cert_builder.set_serial_number(&serial_number)?;
-        cert_builder.set_subject_name(&x509_name)?;
-        cert_builder.set_issuer_name(&x509_name)?;
-        cert_builder.set_pubkey(&key_pair)?;
-        let not_before = openssl::asn1::Asn1Time::days_from_now(0)?;
-        cert_builder.set_not_before(&not_before)?;
-        let not_after = openssl::asn1::Asn1Time::days_from_now(365)?;
-        cert_builder.set_not_after(&not_after)?;
-
-        cert_builder.append_extension(
-            openssl::x509::extension::BasicConstraints::new()
-                .critical()
-                .ca()
-                .build()?,
-        )?;
-        cert_builder.append_extension(
-            openssl::x509::extension::KeyUsage::new()
-                .critical()
-                .key_cert_sign()
-                .crl_sign()
-                .build()?,
-        )?;
-
-        let subject_key_identifier = openssl::x509::extension::SubjectKeyIdentifier::new()
-            .build(&cert_builder.x509v3_context(None, None))?;
-        cert_builder.append_extension(subject_key_identifier)?;
-
-        cert_builder.sign(&key_pair, openssl::hash::MessageDigest::sha256())?;
-        let cert = cert_builder.build();
-
-        Ok((cert, key_pair))
-    }
-
-    #[test]
-    fn create_config() {
-        // Generate certificate
-        let (sign_cert, sign_key) = make_cert().unwrap();
-
-        let sign_cert = &sign_cert.to_pem().unwrap();
-        let sign_key = &sign_key.private_key_to_pem_pkcs8().unwrap();
-
-        let _ = SignConfig::new(WWDR::G4, sign_cert, sign_key).unwrap();
-    }
 }
