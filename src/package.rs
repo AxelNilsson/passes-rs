@@ -128,32 +128,9 @@ impl Package {
 
         // If SignConfig is provided, make signature
         if let Some(sign_config) = &self.sign_config {
-            // Make signature without signing content
-            let flags = openssl::pkcs7::Pkcs7Flags::DETACHED;
-            // Add WWDR cert to chain
-            let mut certs = openssl::stack::Stack::new().expect("Error while prepare certificate");
-            certs
-                .push(sign_config.cert.clone())
-                .expect("Error while prepare certificate");
-
-            // Signing
-            let pkcs7 = openssl::pkcs7::Pkcs7::sign(
-                &sign_config.sign_cert,
-                &sign_config.sign_key,
-                &certs,
-                manifest_json.as_bytes(),
-                flags,
-            )
-            .expect("Error while signing package");
-
-            // Generate signature
-            let signature_data = pkcs7.to_der().expect("Error while generating signature");
-
-            // Adding signature to zip
-            zip.start_file("signature", options)
-                .expect("Error while creating signature in zip");
-            zip.write_all(&signature_data)
-                .expect("Error while writing signature in zip");
+            // TODO: Implement CMS signing without OpenSSL
+            // This part needs to be reimplemented using a different CMS library or custom implementation
+            unimplemented!("CMS signing without OpenSSL is not yet implemented");
         }
 
         zip.finish().expect("Error while saving zip");
