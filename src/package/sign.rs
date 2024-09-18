@@ -1,6 +1,6 @@
 use rsa::pkcs1::DecodeRsaPrivateKey;
-use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::DecodePrivateKey;
+use rsa::pss::SigningKey;
 use rsa::sha2::Sha256;
 use rsa::RsaPrivateKey;
 use spki::der::Decode;
