@@ -1,8 +1,8 @@
 use rsa::pkcs1::DecodeRsaPrivateKey;
+use rsa::pkcs1v15::SigningKey;
 use rsa::pkcs8::DecodePrivateKey;
-use rsa::pss::SigningKey;
-use rsa::sha2::Sha256;
 use rsa::RsaPrivateKey;
+use sha1::Sha1;
 use spki::der::Decode;
 use spki::der::DecodePem;
 use x509_cert::Certificate;
@@ -14,7 +14,7 @@ use x509_cert::Certificate;
 pub struct SignConfig {
     pub cert: Certificate,
     pub sign_cert: Certificate,
-    pub sign_key: SigningKey<Sha256>,
+    pub sign_key: SigningKey<Sha1>,
 }
 
 impl SignConfig {
@@ -65,7 +65,7 @@ impl SignConfig {
                 })?
         };
 
-        let sign_key = SigningKey::<Sha256>::new(rsa_private_key);
+        let sign_key = SigningKey::<Sha1>::new(rsa_private_key);
 
         Ok(SignConfig {
             cert,
@@ -91,10 +91,10 @@ mod tests {
     use rsa::pkcs8::EncodePrivateKey;
 
     /// Make x509 certificate and private key
-    fn make_cert() -> Result<(Certificate, SigningKey<Sha256>), Error> {
+    fn make_cert() -> Result<(Certificate, SigningKey<Sha1>), Error> {
         // This is a simplified version. You'll need to implement proper certificate generation.
         let private_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
-        let signing_key = SigningKey::<Sha256>::new(private_key);
+        let signing_key = SigningKey::<Sha1>::new(private_key);
 
         // Create a self-signed certificate (this is a placeholder)
         let cert = Certificate::self_signed(
