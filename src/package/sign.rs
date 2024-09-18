@@ -23,46 +23,24 @@ impl SignConfig {
         wwdr: WWDR,
         sign_cert: &[u8],
         sign_key: &[u8],
-    ) -> Result<SignConfig, std::io::Error> {
+    ) -> Result<SignConfig, Box<dyn std::error::Error>> {
         let cert = match wwdr {
-            WWDR::G4 => Certificate::from_der(G4_CERT).unwrap(),
-            WWDR::Custom(buf) => Certificate::from_pem(buf).unwrap(),
+            WWDR::G4 => Certificate::from_der(G4_CERT)?,
+            WWDR::Custom(buf) => Certificate::from_pem(buf)?,
         };
 
-        let sign_cert = Certificate::from_pem(sign_cert).unwrap();
+        let sign_cert = Certificate::from_pem(sign_cert)?;
 
         let rsa_private_key = if sign_key.starts_with(b"-----BEGIN RSA PRIVATE KEY-----") {
             // PKCS#1 PEM format
-            RsaPrivateKey::from_pkcs1_pem(std::str::from_utf8(sign_key).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 in PEM")
-            })?)
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Failed to parse RSA private key from PKCS#1 PEM",
-                )
-            })?
+            RsaPrivateKey::from_pkcs1_pem(std::str::from_utf8(sign_key)?)?
         } else if sign_key.starts_with(b"-----BEGIN PRIVATE KEY-----") {
             // PKCS#8 PEM format
-            RsaPrivateKey::from_pkcs8_pem(std::str::from_utf8(sign_key).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid UTF-8 in PEM")
-            })?)
-            .map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Failed to parse RSA private key from PKCS#8 PEM",
-                )
-            })?
+            RsaPrivateKey::from_pkcs8_pem(std::str::from_utf8(sign_key)?)?
         } else {
             // Assume DER format (could be PKCS#1 or PKCS#8)
             RsaPrivateKey::from_pkcs1_der(sign_key)
-                .or_else(|_| RsaPrivateKey::from_pkcs8_der(sign_key))
-                .map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "Failed to parse RSA private key from DER",
-                    )
-                })?
+                .or_else(|_| RsaPrivateKey::from_pkcs8_der(sign_key))?
         };
 
         let sign_key = SigningKey::<Sha1>::new(rsa_private_key);
