@@ -157,7 +157,7 @@ impl Package {
             };
 
             // Create EncapsulatedContentInfo
-            let econtent_type = const_oid::db::rfc5912::RSA_ENCRYPTION;
+            let econtent_type = const_oid::db::rfc5911::ID_DATA;
             let econtent = None;
             let encap_content_info = EncapsulatedContentInfo {
                 econtent_type,
