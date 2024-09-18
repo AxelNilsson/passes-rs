@@ -51,21 +51,21 @@ impl Package {
     /// Use for creating .pkpass file from template.
     pub fn read<R: Read + Seek>(reader: R) -> Result<Self, &'static str> {
         // Read .pkpass as zip
-        let mut zip = zip::ZipArchive::new(reader).expect("Error unzipping pkpass");
+        let mut zip = zip::ZipArchive::new(reader).map_err(|_| "Error unzipping pkpass")?;
 
         let mut pass: Option<Pass> = None;
         let mut resources = Vec::<Resource>::new();
 
         for i in 0..zip.len() {
             // Get file name
-            let mut file = zip.by_index(i).unwrap();
+            let mut file = zip.by_index(i).map_err(|_| "Error accessing zip entry")?;
             let filename = file.name();
             // Read pass.json file
             if filename == "pass.json" {
                 let mut buf = String::new();
                 file.read_to_string(&mut buf)
-                    .expect("Error while reading pass.json");
-                pass = Some(Pass::from_json(&buf).expect("Error while parsing pass.json"));
+                    .map_err(|_| "Error while reading pass.json")?;
+                pass = Some(Pass::from_json(&buf).map_err(|_| "Error while parsing pass.json")?);
                 continue;
             }
             // Read resource files
@@ -74,7 +74,7 @@ impl Package {
                 Ok(t) => {
                     let mut resource = Resource::new(t);
                     std::io::copy(&mut file, &mut resource)
-                        .expect("Error while reading resource file");
+                        .map_err(|_| "Error while reading resource file")?;
                     resources.push(resource);
                 }
                 // Skip unknown files
@@ -108,41 +108,51 @@ impl Package {
 
         // Adding pass.json to zip
         zip.start_file("pass.json", options)
-            .expect("Error while creating pass.json in zip");
+            .map_err(|_| "Error while creating pass.json in zip")?;
         let pass_json = self
             .pass
             .make_json()
-            .expect("Error while building pass.json");
+            .map_err(|_| "Error while building pass.json")?;
         zip.write_all(pass_json.as_bytes())
-            .expect("Error while writing pass.json in zip");
+            .map_err(|_| "Error while writing pass.json in zip")?;
         manifest.add_item("pass.json", pass_json.as_bytes());
 
         // Adding each resource files to zip
         for resource in &self.resources {
             zip.start_file(resource.filename(), options)
-                .expect("Error while creating resource file in zip");
+                .map_err(|_| "Error while creating resource file in zip")?;
             zip.write_all(resource.as_bytes())
-                .expect("Error while writing resource file in zip");
+                .map_err(|_| "Error while writing resource file in zip")?;
             manifest.add_item(resource.filename().as_str(), resource.as_bytes());
         }
 
         // Adding manifest.json to zip
         zip.start_file("manifest.json", options)
-            .expect("Error while creating manifest.json in zip");
+            .map_err(|_| "Error while creating manifest.json in zip")?;
         let manifest_json = manifest
             .make_json()
-            .expect("Error while generating manifest file");
+            .map_err(|_| "Error while generating manifest file")?;
         zip.write_all(manifest_json.as_bytes())
-            .expect("Error while writing manifest.json in zip");
+            .map_err(|_| "Error while writing manifest.json in zip")?;
         manifest.add_item("manifest.json", manifest_json.as_bytes());
 
         // If SignConfig is provided, make signature
         if let Some(sign_config) = &self.sign_config {
             // Parse certificates
-            let signer_cert = Certificate::from_der(&sign_config.sign_cert.to_der().unwrap())
-                .map_err(|_| "Failed to parse signer certificate")?;
-            let wwdr_cert = Certificate::from_der(&sign_config.cert.to_der().unwrap())
-                .map_err(|_| "Failed to parse WWDR certificate")?;
+            let signer_cert = Certificate::from_der(
+                &sign_config
+                    .sign_cert
+                    .to_der()
+                    .map_err(|_| "Failed to encode signer certificate")?,
+            )
+            .map_err(|_| "Failed to parse signer certificate")?;
+            let wwdr_cert = Certificate::from_der(
+                &sign_config
+                    .cert
+                    .to_der()
+                    .map_err(|_| "Failed to encode WWDR certificate")?,
+            )
+            .map_err(|_| "Failed to parse WWDR certificate")?;
 
             // Create signer info
             let signer_identifier =
@@ -171,7 +181,7 @@ impl Package {
                 &encap_content_info,
                 None,
             )
-            .unwrap();
+            .map_err(|_| "Failed to create SignerInfoBuilder")?;
 
             // Hash manifest.json
 
@@ -185,20 +195,23 @@ impl Package {
             // which in this case is equivalent to [u8; 20]
             let manifest_digest = hasher.finalize();
 
-            let signed_timestamp = create_signing_time_attribute().unwrap();
+            let signed_timestamp = create_signing_time_attribute()
+                .map_err(|_| "Failed to create signing time attribute")?;
             signed_info_builder
                 .add_signed_attribute(signed_timestamp)
-                .unwrap();
+                .map_err(|_| "Failed to add signed timestamp attribute")?;
 
-            let signed_message_digest = create_message_digest_attribute(&manifest_digest).unwrap();
+            let signed_message_digest = create_message_digest_attribute(&manifest_digest)
+                .map_err(|_| "Failed to create message digest attribute")?;
             signed_info_builder
                 .add_signed_attribute(signed_message_digest)
-                .unwrap();
+                .map_err(|_| "Failed to add signed message digest attribute")?;
 
-            let content_type_attribute = create_content_type_attribute(econtent_type).unwrap();
+            let content_type_attribute = create_content_type_attribute(econtent_type)
+                .map_err(|_| "Failed to create content type attribute")?;
             signed_info_builder
                 .add_signed_attribute(content_type_attribute)
-                .unwrap();
+                .map_err(|_| "Failed to add content type attribute")?;
 
             // Create EncapsulatedContentInfo
             let encap_content_info = EncapsulatedContentInfo {
@@ -210,21 +223,23 @@ impl Package {
 
             signed_data_builder
                 .add_digest_algorithm(digest_algorithm)
-                .unwrap();
+                .map_err(|_| "Failed to add digest algorithm")?;
 
             signed_data_builder
                 .add_signer_info(signed_info_builder)
-                .unwrap();
+                .map_err(|_| "Failed to add signer info")?;
 
             signed_data_builder
                 .add_certificate(CertificateChoices::Certificate(wwdr_cert))
-                .unwrap();
+                .map_err(|_| "Failed to add WWDR certificate")?;
 
             signed_data_builder
                 .add_certificate(CertificateChoices::Certificate(signer_cert))
-                .unwrap();
+                .map_err(|_| "Failed to add signer certificate")?;
 
-            let signed_data = signed_data_builder.build().unwrap();
+            let signed_data = signed_data_builder
+                .build()
+                .map_err(|_| "Failed to build signed data")?;
 
             // Serialize ContentInfo to DER
             let signature = signed_data
@@ -233,12 +248,12 @@ impl Package {
 
             // Adding signature to zip
             zip.start_file("signature", options)
-                .expect("Error while creating signature in zip");
+                .map_err(|_| "Error while creating signature in zip")?;
             zip.write_all(&signature)
-                .expect("Error while writing signature in zip");
+                .map_err(|_| "Error while writing signature in zip")?;
         }
 
-        zip.finish().expect("Error while saving zip");
+        zip.finish().map_err(|_| "Error while saving zip")?;
 
         Ok(())
     }
@@ -252,7 +267,7 @@ impl Package {
         mut reader: R,
     ) -> Result<(), &'static str> {
         let mut resource = Resource::new(image_type);
-        std::io::copy(&mut reader, &mut resource).expect("Error while reading resource");
+        std::io::copy(&mut reader, &mut resource).map_err(|_| "Error while reading resource")?;
         self.resources.push(resource);
         Ok(())
     }
