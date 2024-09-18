@@ -1,7 +1,20 @@
+use cms::{
+    builder::{
+        create_content_type_attribute, create_message_digest_attribute,
+        create_signing_time_attribute, SignedDataBuilder, SignerInfoBuilder,
+    },
+    cert::{CertificateChoices, IssuerAndSerialNumber},
+    signed_data::{EncapsulatedContentInfo, SignerIdentifier},
+};
+use sha1::{Digest, Sha1};
+use spki::AlgorithmIdentifierOwned;
 use std::{
     io::{Read, Seek, Write},
     str::FromStr,
 };
+use x509_cert::der::Decode;
+use x509_cert::der::Encode;
+use x509_cert::Certificate;
 
 use crate::pass::Pass;
 
@@ -86,9 +99,6 @@ impl Package {
         self.sign_config = Some(config);
     }
 
-    /// Write compressed package.
-    ///
-    /// Use for creating .pkpass file
     pub fn write<W: Write + Seek>(&mut self, writer: W) -> Result<(), &'static str> {
         let mut manifest = Manifest::new();
 
@@ -128,9 +138,104 @@ impl Package {
 
         // If SignConfig is provided, make signature
         if let Some(sign_config) = &self.sign_config {
-            // TODO: Implement CMS signing without OpenSSL
-            // This part needs to be reimplemented using a different CMS library or custom implementation
-            unimplemented!("CMS signing without OpenSSL is not yet implemented");
+            // Parse certificates
+            let signer_cert = Certificate::from_der(&sign_config.sign_cert.to_der().unwrap())
+                .map_err(|_| "Failed to parse signer certificate")?;
+            let wwdr_cert = Certificate::from_der(&sign_config.cert.to_der().unwrap())
+                .map_err(|_| "Failed to parse WWDR certificate")?;
+
+            // Create signer info
+            let signer_identifier =
+                SignerIdentifier::IssuerAndSerialNumber(IssuerAndSerialNumber {
+                    issuer: signer_cert.clone().tbs_certificate.issuer,
+                    serial_number: signer_cert.clone().tbs_certificate.serial_number,
+                });
+
+            let digest_algorithm = AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5912::ID_SHA_1,
+                parameters: Some(der::asn1::Null.into()),
+            };
+
+            // Create EncapsulatedContentInfo
+            let econtent_type = const_oid::db::rfc5911::ID_DATA;
+            let econtent = None;
+            let encap_content_info = EncapsulatedContentInfo {
+                econtent_type,
+                econtent,
+            };
+
+            let mut signed_info_builder = SignerInfoBuilder::new(
+                &sign_config.sign_key,
+                signer_identifier,
+                digest_algorithm.clone(),
+                &encap_content_info,
+                None,
+            )
+            .unwrap();
+
+            // Hash manifest.json
+
+            // create a Sha1 object
+            let mut hasher = Sha1::new();
+
+            // process input message
+            hasher.update(manifest_json.as_bytes());
+
+            // acquire hash digest in the form of GenericArray,
+            // which in this case is equivalent to [u8; 20]
+            let manifest_digest = hasher.finalize();
+
+            let signed_timestamp = create_signing_time_attribute().unwrap();
+            signed_info_builder
+                .add_signed_attribute(signed_timestamp)
+                .unwrap();
+
+            let signed_message_digest = create_message_digest_attribute(&manifest_digest).unwrap();
+            signed_info_builder
+                .add_signed_attribute(signed_message_digest)
+                .unwrap();
+
+            let content_type_attribute = create_content_type_attribute(econtent_type).unwrap();
+            signed_info_builder
+                .add_signed_attribute(content_type_attribute)
+                .unwrap();
+
+            // Create EncapsulatedContentInfo
+            let encap_content_info = EncapsulatedContentInfo {
+                econtent_type: const_oid::db::rfc5911::ID_DATA,
+                econtent: None,
+            };
+
+            let mut signed_data_builder = SignedDataBuilder::new(&encap_content_info);
+
+            signed_data_builder
+                .add_digest_algorithm(digest_algorithm)
+                .unwrap();
+
+            signed_data_builder
+                .add_signer_info(signed_info_builder)
+                .unwrap();
+
+            signed_data_builder
+                .add_certificate(CertificateChoices::Certificate(wwdr_cert))
+                .unwrap();
+
+            signed_data_builder
+                .add_certificate(CertificateChoices::Certificate(signer_cert))
+                .unwrap();
+
+            let signed_data = signed_data_builder.build().unwrap();
+
+            // Serialize ContentInfo to DER
+            let signature = signed_data
+                .to_der()
+                .map_err(|_| "Failed to serialize ContentInfo to DER")?;
+
+            // Adding signature to zip
+            zip.start_file("signature", options)
+                .expect("Error while creating signature in zip");
+            zip.write_all(&signature)
+                .expect("Error while writing signature in zip");
         }
 
         zip.finish().expect("Error while saving zip");

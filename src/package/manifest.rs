@@ -1,13 +1,13 @@
 use serde::{ser::SerializeMap, Serialize};
 use sha1::{Digest, Sha1};
 
-/// Represents manifest.json file, contains SHA-256 of all .pkpass files.
+/// Represents manifest.json file, contains SHA1 of all .pkpass files.
 ///
 /// Only serialization supported!
 ///
 /// <https://developer.apple.com/documentation/walletorders/building_a_distributable_order_package>
 pub struct Manifest {
-    /// All manifest files with SHA-256
+    /// All manifest files with SHA1
     items: Vec<Item>,
 }
 
@@ -53,7 +53,7 @@ struct Item {
     /// Path of zip file
     path: String,
 
-    /// SHA-256 hash
+    /// SHA1 hash
     checksum: String,
 }
 
