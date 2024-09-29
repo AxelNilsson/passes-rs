@@ -103,7 +103,7 @@ impl Package {
         let mut manifest = Manifest::new();
 
         let mut zip = zip::ZipWriter::new(writer);
-        let options =
+        let options: zip::write::FileOptions<'_, ()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         // Adding pass.json to zip
